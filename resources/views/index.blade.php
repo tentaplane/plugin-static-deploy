@@ -71,26 +71,6 @@
 
                 <div class="tp-panel space-y-3">
                     <label class="flex items-center gap-3">
-                        <input type="checkbox" class="tp-checkbox" name="include_public_build" value="1" checked />
-                        <span class="text-sm">
-                            <span class="font-semibold">Include public/build</span>
-                            <span class="tp-muted mt-1 block text-xs">
-                                Copies compiled frontend assets if present. Skips admin.css/admin.js.
-                            </span>
-                        </span>
-                    </label>
-
-                    <label class="flex items-center gap-3">
-                        <input type="checkbox" class="tp-checkbox" name="include_public_assets" value="1" checked />
-                        <span class="text-sm">
-                            <span class="font-semibold">Include public/assets</span>
-                            <span class="tp-muted mt-1 block text-xs">
-                                Copies static assets if present. Skips admin.css/admin.js.
-                            </span>
-                        </span>
-                    </label>
-
-                    <label class="flex items-center gap-3">
                         <input type="checkbox" class="tp-checkbox" name="include_favicon" value="1" checked />
                         <span class="text-sm"><span class="font-semibold">Include favicon.ico</span></span>
                     </label>

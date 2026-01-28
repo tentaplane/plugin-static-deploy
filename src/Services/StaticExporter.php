@@ -22,8 +22,6 @@ final class StaticExporter
 
     /**
      * @param array{
-     *   include_public_build?:bool,
-     *   include_public_assets?:bool,
      *   include_favicon?:bool,
      *   include_robots?:bool,
      *   compress_html?:bool
@@ -40,8 +38,6 @@ final class StaticExporter
      */
     public function build(array $options = []): array
     {
-        $includePublicBuild = (bool) ($options['include_public_build'] ?? true);
-        $includePublicAssets = (bool) ($options['include_public_assets'] ?? true);
         $includeFavicon = (bool) ($options['include_favicon'] ?? true);
         $includeRobots = (bool) ($options['include_robots'] ?? true);
         $compressHtml = (bool) ($options['compress_html'] ?? false);
@@ -96,17 +92,13 @@ final class StaticExporter
                 'admin.css',
                 '*admin*.js',
                 '*admin*.css',
+                'theme*.css',
             ];
 
-            if ($includePublicBuild) {
-                $this->copyDirFiltered(public_path('build'), $publicTarget . DIRECTORY_SEPARATOR . 'build', $warnings, $excludeAdmin);
-                $this->copyDirFiltered(public_path('themes'), $publicTarget . DIRECTORY_SEPARATOR . 'themes', $warnings);
-                $this->copyPublicStorage($publicTarget . DIRECTORY_SEPARATOR . 'storage', $warnings);
-            }
+            $this->copyActiveThemeAssetsFlat($publicTarget, $warnings);
+            $this->copyPublicStorage($publicTarget . DIRECTORY_SEPARATOR . 'storage', $warnings);
 
-            if ($includePublicAssets) {
-                $this->copyDirFiltered(public_path('assets'), $publicTarget . DIRECTORY_SEPARATOR . 'assets', $warnings, $excludeAdmin);
-            }
+            $this->copyDirFiltered(public_path('assets'), $publicTarget . DIRECTORY_SEPARATOR . 'assets', $warnings, $excludeAdmin);
 
             if ($includeFavicon) {
                 $this->copyFileIfExists(public_path('favicon.ico'), $publicTarget . DIRECTORY_SEPARATOR . 'favicon.ico', $warnings);
@@ -470,10 +462,10 @@ final class StaticExporter
         $appUrl = rtrim($appUrl, '/');
 
         $html = $this->rewriteViteDevUrls($html);
+        $html = $this->rewriteThemeBuildUrls($html);
         $html = $this->rewriteAbsoluteAppUrls($html, $appUrl);
 
         // Absolute URLs first
-        $html = $this->rewriteAttrPrefixes($html, $appUrl . '/build/', '/public/build/');
         $html = $this->rewriteAttrPrefixes($html, $appUrl . '/assets/', '/public/assets/');
         $html = $this->rewriteAttrPrefixes($html, $appUrl . '/themes/', '/public/themes/');
         $html = $this->rewriteAttrPrefixes($html, $appUrl . '/storage/', '/public/storage/');
@@ -481,7 +473,6 @@ final class StaticExporter
         $html = $this->rewriteAttrPrefixes($html, $appUrl . '/robots.txt', '/public/robots.txt');
 
         // Root-absolute paths
-        $html = $this->rewriteAttrPrefixes($html, '/build/', '/public/build/');
         $html = $this->rewriteAttrPrefixes($html, '/assets/', '/public/assets/');
         $html = $this->rewriteAttrPrefixes($html, '/themes/', '/public/themes/');
         $html = $this->rewriteAttrPrefixes($html, '/storage/', '/public/storage/');
@@ -594,19 +585,11 @@ final class StaticExporter
      */
     private function viteManifestMap(): array
     {
-        $map = $this->readViteManifest(public_path('build/manifest.json'), '/public/build/');
+        $map = [];
 
-        $themeBuildDir = $this->resolveThemeBuildDirectory();
-
-        if (is_string($themeBuildDir)) {
-            $themeManifest = $this->readViteManifest(
-                public_path($themeBuildDir . '/manifest.json'),
-                '/public/' . trim($themeBuildDir, '/') . '/'
-            );
-
-            if ($themeManifest !== []) {
-                $map = array_merge($map, $themeManifest);
-            }
+        $themeMap = $this->activeThemeFlatInputMap();
+        if ($themeMap !== []) {
+            $map = array_merge($map, $themeMap);
         }
 
         return $map;
@@ -647,6 +630,149 @@ final class StaticExporter
         }
 
         return $map;
+    }
+
+    /**
+     * @return array{buildDir:string,manifest:array<string,mixed>}|null
+     */
+    private function activeThemeManifest(): ?array
+    {
+        $themeBuildDir = $this->resolveThemeBuildDirectory();
+        if (!is_string($themeBuildDir)) {
+            return null;
+        }
+
+        $manifestPath = public_path($themeBuildDir . '/manifest.json');
+        if (!is_file($manifestPath)) {
+            return null;
+        }
+
+        try {
+            $decoded = json_decode((string) File::get($manifestPath), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        return [
+            'buildDir' => $themeBuildDir,
+            'manifest' => $decoded,
+        ];
+    }
+
+    /**
+     * @return array{css?:string,js?:string}
+     */
+    private function activeThemeEntryFiles(): array
+    {
+        $data = $this->activeThemeManifest();
+        if ($data === null) {
+            return [];
+        }
+
+        $manifest = $data['manifest'];
+
+        $css = $manifest['resources/css/theme.css']['file'] ?? null;
+        $js = $manifest['resources/js/theme.js']['file'] ?? null;
+
+        return [
+            'css' => is_string($css) ? $css : null,
+            'js' => is_string($js) ? $js : null,
+        ];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function activeThemeFlatInputMap(): array
+    {
+        $files = $this->activeThemeEntryFiles();
+
+        $map = [];
+
+        if (!empty($files['css'])) {
+            $map['resources/css/theme.css'] = '/public/theme.css';
+        }
+
+        if (!empty($files['js'])) {
+            $map['resources/js/theme.js'] = '/public/theme.js';
+        }
+
+        return $map;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function activeThemeFlatOutputMap(): array
+    {
+        $data = $this->activeThemeManifest();
+        if ($data === null) {
+            return [];
+        }
+
+        $buildDir = trim($data['buildDir'], '/');
+        $files = $this->activeThemeEntryFiles();
+
+        $map = [];
+
+        if (!empty($files['css'])) {
+            $map[$buildDir . '/' . ltrim((string) $files['css'], '/')] = '/public/theme.css';
+        }
+
+        if (!empty($files['js'])) {
+            $map[$buildDir . '/' . ltrim((string) $files['js'], '/')] = '/public/theme.js';
+        }
+
+        return $map;
+    }
+
+    private function rewriteThemeBuildUrls(string $html): string
+    {
+        $map = $this->activeThemeFlatOutputMap();
+
+        if ($map === []) {
+            return $html;
+        }
+
+        return $this->rewriteAttrMap($html, $map);
+    }
+
+    /**
+     * @param array<string,string> $map
+     */
+    private function rewriteAttrMap(string $html, array $map): string
+    {
+        $attrs = ['href', 'src', 'content', 'data-src'];
+
+        foreach ($attrs as $attr) {
+            $pattern = '/\\b' . preg_quote($attr, '/') . '\\s*=\\s*(["\\\'])(.*?)\\1/i';
+
+            $html = preg_replace_callback($pattern, function (array $m) use ($attr, $map) {
+                $q = $m[1];
+                $val = $m[2];
+
+                $path = null;
+
+                if (str_starts_with($val, 'http://') || str_starts_with($val, 'https://')) {
+                    $parts = parse_url($val);
+                    $path = isset($parts['path']) ? ltrim((string) $parts['path'], '/') : null;
+                } elseif (str_starts_with($val, '/')) {
+                    $path = ltrim($val, '/');
+                }
+
+                if ($path === null || !isset($map[$path])) {
+                    return $m[0];
+                }
+
+                return $attr . '=' . $q . $map[$path] . $q;
+            }, $html) ?? $html;
+        }
+
+        return $html;
     }
 
     private function resolveThemeBuildDirectory(): ?string
@@ -943,6 +1069,39 @@ final class StaticExporter
 
         $publicStorage = public_path('storage');
         $this->copyDirFiltered($publicStorage, $target, $warnings);
+    }
+
+    /**
+     * @param array<int,string> $warnings
+     */
+    private function copyActiveThemeAssetsFlat(string $publicTarget, array &$warnings): void
+    {
+        $data = $this->activeThemeManifest();
+        if ($data === null) {
+            $warnings[] = 'No active theme build manifest found; skipping theme assets.';
+            return;
+        }
+
+        $themeBuildDir = $data['buildDir'];
+        $files = $this->activeThemeEntryFiles();
+
+        $fromBase = public_path($themeBuildDir);
+        if (!is_dir($fromBase)) {
+            $warnings[] = 'Active theme build directory missing: ' . $fromBase;
+            return;
+        }
+
+        if (!empty($files['css'])) {
+            $from = $fromBase . DIRECTORY_SEPARATOR . $files['css'];
+            $to = $publicTarget . DIRECTORY_SEPARATOR . 'theme.css';
+            $this->copyFileIfExists($from, $to, $warnings);
+        }
+
+        if (!empty($files['js'])) {
+            $from = $fromBase . DIRECTORY_SEPARATOR . $files['js'];
+            $to = $publicTarget . DIRECTORY_SEPARATOR . 'theme.js';
+            $this->copyFileIfExists($from, $to, $warnings);
+        }
     }
 
     private function zipDirectory(string $dir, string $zipPath): void
